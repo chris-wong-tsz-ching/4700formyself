@@ -21,7 +21,7 @@ def main():
 	SERVER_IP = get_dest_IP(HOST)
 	RECV_SOCK = create_recv_socket()
 	SEND_SOCK = create_send_socket()
-	three_way_handshake()
+	establish_three_way_handshake_then_http_request()
 
 #=======================================================================
 
@@ -213,7 +213,7 @@ def creat_http_request(HOST, PATH):
 #========================================================================
 
 # establish three-way handshake.
-def three_way_handshake(HOST, PATH):
+def establish_three_way_handshake_then_http_request(HOST, PATH):
 	global CLIENT_IP, SERVER_IP, RECV_SOCK, SEND_SOCK
 
 	packet = create_IP_header(CLIENT_IP, SERVER_IP) + create_TCP_header(454, 0, 1, 0)
