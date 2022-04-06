@@ -6,6 +6,7 @@ import random
 from struct import pack, unpack
 from unicodedata import name
 from urllib.parse import urlparse
+
 #=======================================================================
 
 # this is the main function.
@@ -15,13 +16,14 @@ def main():
 		print("invalid number of arguments: expect 2.")
 		sys.exit()
 
+	global url, HOST, PATH, CLIENT_IP, SERVER_IP, RECV_SOCK, SEND_SOCK
 	url = sys.argv[1]
-	HOST, PATH = urlparse(url)
+	HOST, PATH = parse(url)
 	CLIENT_IP = get_source_IP()
 	SERVER_IP = get_dest_IP(HOST)
 	RECV_SOCK = create_recv_socket()
 	SEND_SOCK = create_send_socket()
-	establish_three_way_handshake_then_http_request()
+	establish_three_way_handshake_then_http_request(HOST, PATH)
 
 #=======================================================================
 
@@ -70,12 +72,12 @@ def create_send_socket():
 
 # this function takes in an url string and return its scheme, hostname, path
 
-def urlparse(url):
+def parse(url):
 	parsedURL = urlparse(url)
 	dest_scheme = parsedURL.scheme
 	dest_netloc = parsedURL.netloc
 	dest_path = parsedURL.path
-	return dest_scheme, dest_netloc, dest_path
+	return dest_netloc, dest_path
 
 #======================================================================
 
