@@ -7,6 +7,12 @@ from struct import pack, unpack
 from urllib.parse import urlparse
 import time
 
+'''
+currently this program is ran by the following command:
+sudo ./get [url]
+please modify accordingly depends on your requirements.
+'''
+
 #=======================================================================
 
 # this is the main function.
@@ -109,11 +115,11 @@ def checksum(msg):
 
 # this function creates an IP header.
 
-def create_IP_header(source_IP, dest_IP):
+def create_IP_header(source_IP, dest_IP, length):
 	IHL = 5
 	VER = 4
 	TOS = 0
-	total_length = 0
+	total_length = 20 + (length if length%2 == 0 else length+1)
 	id = random.randrange(1000, 9999)
 	frag_off = 0
 	ttl = 255
@@ -157,14 +163,14 @@ def create_IP_header(source_IP, dest_IP):
 
 # this function returns a TCP header.
 
-def create_TCP_header(seqnum, acknum, synNum, ackNum,  data=""):
+def create_TCP_header(seqnum, acknum, synNum, ackNum,  data="", finNum=0):
 	global SERVER_IP
 	source_port = 3024
 	dest_port = 80
 	sequence = seqnum
 	ACK_sequence = acknum
 	doff = 5
-	fin = 0
+	fin = finNum
 	syn = synNum
 	rst = 0
 	psh = 0
@@ -210,7 +216,7 @@ def create_TCP_header(seqnum, acknum, synNum, ackNum,  data=""):
 		flags,
 		tcp_window) + pack("H", check_sum) + pack("!H", urg_ptr)
 	
-	return tcp_header
+	return tcp_header, 20+len(data)
 
 #========================================================================
 
@@ -226,7 +232,8 @@ def creat_http_request(HOST, PATH):
 def establish_three_way_handshake_then_http_request(HOST, PATH):
 	global CLIENT_IP, SERVER_IP, RECV_SOCK, SEND_SOCK
 
-	packet = create_IP_header(CLIENT_IP, SERVER_IP) + create_TCP_header(454, 0, 1, 0)
+	tcpHeader, length = create_TCP_header(454, 0, 1, 0)
+	packet= create_IP_header(CLIENT_IP, SERVER_IP, length) + tcpHeader
 	SEND_SOCK.sendto(packet ,(SERVER_IP,80))
 	request_tcp_header = unpack("!HHLLBBHHH", packet[20:40])
 	request_sequence_number = request_tcp_header[2]
@@ -243,31 +250,51 @@ def establish_three_way_handshake_then_http_request(HOST, PATH):
 
 		if response_server_ip == SERVER_IP and response_ack_num-1 == request_sequence_number and SynAck_flag == 18:
 			HttpRequest = creat_http_request(HOST, PATH)
-			thirdWay = create_IP_header(CLIENT_IP, SERVER_IP) + create_TCP_header(response_ack_num, response_sequence_number+1, 0, 1, HttpRequest) + HttpRequest.encode()
-			ACKed = False
-			SEND_SOCK.sendto(thirdWay ,(SERVER_IP,80))
-			start_time = time.time()
+			mss = unpacked_response_tcp_header[9]
+			fin = 0
+			starting_index = 0
+			slow_start = True
+			congestion_window = 1
+			seq = response_ack_num
 
-			while not ACKed:
-				packet = RECV_SOCK.recv(80000)
-				response_ip_header = packet[:20]
-				unpacked_response_ip_header = unpack("!BBHHHBBH4s4s", response_ip_header)
-				response_tcp_header = packet[20:40]
-				unpacked_response_tcp_header = unpack("!HHLLBBHHH", response_tcp_header)
-				response_server_ip = socket.inet_ntoa(unpacked_response_ip_header[8])
-				response_sequence_number = unpacked_response_tcp_header[2]
-				response_ack_num = unpacked_response_tcp_header[3]
-				SynAck_flag = unpacked_response_tcp_header[5]
+			while fin == 0:
+				if (slow_start):
+					slow_start = False
+					congestion_window = 1
+				if (not slow_start):
+					starting_index += congestion_window * mss
+				if (len(HttpRequest) > congestion_window*mss + starting_index):
+					data = HttpRequest[starting_index:(starting_index + congestion_window)]
+				else:
+					fin = 1
+					data = HttpRequest[starting_index:]
+				tcpHeader, length = create_TCP_header(seq, response_sequence_number+1, 0, 1, data)
+				thirdWay = create_IP_header(CLIENT_IP, SERVER_IP, length) + tcpHeader + data.encode()
+				SEND_SOCK.sendto(thirdWay ,(SERVER_IP,80))
+				ACKed = False
+				start_time = time.time()
 
-				if response_server_ip == SERVER_IP and SynAck_flag == 16:
-						break
+				while not ACKed:
+					packet = RECV_SOCK.recv(80000)
+					response_ip_header = packet[:20]
+					unpacked_response_ip_header = unpack("!BBHHHBBH4s4s", response_ip_header)
+					response_tcp_header = packet[20:40]
+					unpacked_response_tcp_header = unpack("!HHLLBBHHH", response_tcp_header)
+					response_server_ip = socket.inet_ntoa(unpacked_response_ip_header[8])
+					response_sequence_number = unpacked_response_tcp_header[2]
+					response_ack_num = unpacked_response_tcp_header[3]
+					SynAck_flag = unpacked_response_tcp_header[5]
 
-				if time.time() - start_time > 60:
-					SEND_SOCK.sendto(thirdWay ,(SERVER_IP,80))
-					start_time = time.time()
+
+					if response_server_ip == SERVER_IP and SynAck_flag == 16:
+							mss = unpacked_response_tcp_header[9]
+							seq+=(congestion_window*mss)
+							break
+
+					if time.time() - start_time > 60:
+						SEND_SOCK.sendto(thirdWay ,(SERVER_IP,80))
+						start_time = time.time()
                     
-			SEND_SOCK.close()
-			break
 
 #========================================================================
 
