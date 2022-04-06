@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+
+import socket
+import sys
+import random
+from struct import pack, unpack
+from unicodedata import name
+from urllib.parse import urlparse
+#=======================================================================
+
+# this is the main function.
+
+def main():
+	if (len(sys.argv) != 2):
+		print("invalid number of arguments: expect 2.")
+		sys.exit()
+
+	url = sys.argv[1]
+	HOST, PATH = urlparse(url)
+	CLIENT_IP = get_source_IP()
+	SERVER_IP = get_dest_IP(HOST)
+	RECV_SOCK = create_recv_socket()
+	SEND_SOCK = create_send_socket()
+	three_way_handshake()
+
+#=======================================================================
+
+# this function returns the source IP address(client).
+
+def get_source_IP():
+	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+	s.connect(("8.8.8.8",80))
+	return s.getsockname()[0]
+
+#========================================================================
+
+# this function takes in a hostname and returns its IP address.
+
+def get_dest_IP(hostname):
+	dest_ip = socket.gethostbyname(hostname)
+	return dest_ip
+
+#======================================================================
+
+# this function creates the recieving socket.
+
+def create_recv_socket():
+	try:
+		r = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+	except socket.error as msg:
+		print ('Socket could not be created. Error Code : ' + str(msg[0]) + ' Message ' + msg[1])
+		sys.exit()
+	
+	return r
+
+#======================================================================
+
+# this function creates the sending socket.
+
+def create_send_socket():
+	try:
+		s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
+	except socket.error as msg:
+		print ('Socket could not be created. Error Code : ' + str(msg[0]) + ' Message ' + msg[1])
+		sys.exit()
+	
+	return s
+
+#======================================================================
+
+# this function takes in an url string and return its scheme, hostname, path
+
+def urlparse(url):
+	parsedURL = urlparse(url)
+	dest_scheme = parsedURL.scheme
+	dest_netloc = parsedURL.netloc
+	dest_path = parsedURL.path
+	return dest_scheme, dest_netloc, dest_path
+
+#======================================================================
+
+
+# this function returns the checksum value of the message.
+
+def checksum(msg):
+	sum = 0
+	for i in range(0, len(msg), 2):
+		word = msg[i] if i+1 == len(msg) else msg[i] + (msg[i+1] << 8)
+		sum += word
+	
+	sum = (sum>>16) + (sum & 0xffff)
+	sum += (sum>>16)
+
+	sum = ~sum & 0xffff
+
+	return sum
+
+#========================================================================
+
+# this function creates an IP header.
+
+def create_IP_header(source_IP, dest_IP):
+	IHL = 5
+	VER = 4
+	TOS = 0
+	total_length = 0
+	id = random.randrange(1000, 9999)
+	frag_off = 0
+	ttl = 255
+	protocol = socket.IPPROTO_TCP
+	check_sum = 0
+	source_addr = socket.inet_aton(source_IP)
+	dest_addr = socket.inet_aton(dest_IP)
+
+	IHL_ver = (VER << 4) + IHL
+
+	IP_header = pack(
+					'!BBHHHBBH4s4s',
+					IHL_ver,
+					TOS,
+					total_length,
+					id,
+					frag_off,
+					ttl,
+					protocol,
+					check_sum,
+					source_addr,
+					dest_addr)
+	
+	check_sum = checksum(IP_header)
+	IP_header = pack(
+					'!BBHHHBBH4s4s',
+					IHL_ver,
+					TOS,
+					total_length,
+					id,
+					frag_off,
+					ttl,
+					protocol,
+					check_sum,
+					source_addr,
+					dest_addr)
+	
+	return IP_header
+
+#========================================================================
+
+# this function returns a TCP header.
+
+def create_TCP_header(seqnum, acknum, synNum, ackNum,  data=""):
+	global SERVER_IP
+	source_port = 3022
+	dest_port = 80
+	sequence = seqnum
+	ACK_sequence = acknum
+	doff = 5
+	fin = 0
+	syn = synNum
+	rst = 0
+	psh = 0
+	ack = ackNum
+	urg = 0
+	tcp_window = socket.htons(8192)
+	check_sum = 0
+	urg_ptr = 0
+
+	offset_res = (doff << 4)
+	flags = fin + (syn<<1) + (rst<<2) + (psh<<3) + (ack<<4) + (urg<<5)
+
+	TCP_header = pack(
+		"!HHLLBBHHH",
+		source_port,
+		dest_port,
+		sequence,
+		ACK_sequence,
+		offset_res,
+		flags,
+		tcp_window,
+		check_sum,
+		urg_ptr)
+	
+	source_addr = socket.inet_aton(get_source_IP())
+	dest_addr = socket.inet_aton(get_dest_IP(SERVER_IP))
+	placeholder = 0
+	protocol = socket.IPPROTO_TCP
+	tcp_length = len(TCP_header) + len(data)
+
+	pseudoHeader = pack("!4s4sBBH", source_addr, dest_addr, placeholder, protocol, tcp_length)
+	pseudoHeader += TCP_header
+	pseudoHeader += data.encode()
+
+	check_sum = checksum(pseudoHeader)
+	tcp_header = pack(
+		"!HHLLBBH",
+		source_port,
+		dest_port,
+		sequence,
+		ACK_sequence,
+		offset_res,
+		flags,
+		tcp_window) + pack("H", check_sum) + pack("!H", urg_ptr)
+	
+	return tcp_header
+
+#========================================================================
+
+# create a http request
+def creat_http_request(HOST, PATH):
+	get_request = "GET " + PATH + " HTTP/1.1\r\n" + "HOST: " + HOST + "\r\n\r\n"
+	
+	return get_request
+
+#========================================================================
+
+# establish three-way handshake.
+def three_way_handshake(HOST, PATH):
+	global CLIENT_IP, SERVER_IP, RECV_SOCK, SEND_SOCK
+
+	packet = create_IP_header(CLIENT_IP, SERVER_IP) + create_TCP_header(454, 0, 1, 0)
+	SEND_SOCK.sendto(packet ,(SERVER_IP,80))
+	request_tcp_header = unpack("!HHLLBBHHH", packet[20:40])
+	request_sequence_number = request_tcp_header[2]
+	print(request_tcp_header, request_sequence_number)
+	msg = ""
+	while msg == "":
+		packet = RECV_SOCK.recv(80000)
+		response_ip_header = packet[:20]
+		unpacked_response_ip_header = unpack("!BBHHHBBH4s4s", response_ip_header)
+		response_tcp_header = packet[20:40]
+		unpacked_response_tcp_header = unpack("!HHLLBBHHH", response_tcp_header)
+		response_SERVER_ip = socket.inet_ntoa(unpacked_response_ip_header[8])
+		response_sequence_number = unpacked_response_tcp_header[2]
+		response_ack_num = unpacked_response_tcp_header[3]
+		SynAck_flag = unpacked_response_tcp_header[5]
+		if response_ack_num-1 == request_sequence_number and SynAck_flag == 18:
+			HttpRequest = creat_http_request(HOST, PATH)
+			thirdWay = create_IP_header(CLIENT_IP, SERVER_IP) + create_TCP_header(response_ack_num, response_sequence_number+1, 0, 1, HttpRequest) + HttpRequest.encode()
+			SEND_SOCK.sendto(thirdWay ,(SERVER_IP,80))
+			SEND_SOCK.close()
+
+#========================================================================
+
+if __name__ == "__main__":
+	main()
